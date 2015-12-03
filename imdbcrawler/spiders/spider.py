@@ -28,6 +28,11 @@ class ImdbSpider(scrapy.Spider):
         k = url.rfind("/")
         return url[k+1:]
 
+    def error_handler(self, err):
+        request = err.request
+        if request:
+            self.logger.info("Error processing page: <%s>", request.url)
+
     def start_requests(self):
         if len(self.imdb_ids) == 0:
             query = self.db[self.collection_name].find({
@@ -41,7 +46,7 @@ class ImdbSpider(scrapy.Spider):
         for imdb_id in self.imdb_ids:
             url = self.base_url + "/" + self.imdb_title_endpoint + imdb_id + "/"
             yield scrapy.Request(url + self.imdb_board_endpoint, meta={'url': url, 'page': 1, 'imdb_id': imdb_id},
-                                 callback=self.parse_board)
+                                 callback=self.parse_board, errback=self.error_handler)
 
     def parse_board(self, response):
         threads_table = response.xpath("//*[@class='threads']")
@@ -50,13 +55,13 @@ class ImdbSpider(scrapy.Spider):
                 url = self.base_url + thread.xpath(".//*[@class='title']/a/@href").extract_first()
                 thread_id = self.get_thread_id(url)
                 yield scrapy.Request(url, meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
-                                       'url': response.meta['url'], }, callback=self.parse_thread)
+                                       'url': response.meta['url'], }, callback=self.parse_thread, errback=self.error_handler)
 
             next = threads_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
             if next:
                 url = response.urljoin(next.extract_first())
                 yield scrapy.Request(url, meta={'imdb_id': response.meta['imdb_id'],
-                                           'url': response.meta['url'], }, callback=self.parse_board)
+                                           'url': response.meta['url'], }, callback=self.parse_board, errback=self.error_handler)
 
     def parse_thread(self, response):
         posts_table = response.xpath("//*[starts-with(@class, 'thread')]")
@@ -75,7 +80,7 @@ class ImdbSpider(scrapy.Spider):
                 url = response.urljoin(next.extract_first())
                 yield scrapy.Request(url,
                                      meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
-                                           'url': response.meta['url'], }, callback=self.parse_thread)
+                                           'url': response.meta['url'], }, callback=self.parse_thread, errback=self.error_handler)
 
     @staticmethod
     def get_comment_id(string):
