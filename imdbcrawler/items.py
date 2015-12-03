@@ -3,7 +3,7 @@
 from scrapy.item import Item, Field
 
 class PostItem(Item):
-    id = Field()
+    _id = Field()
     title = Field()
     imdb_id = Field()
     user = Field()

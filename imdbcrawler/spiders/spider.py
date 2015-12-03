@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 import scrapy
-from datetime import datetime, time
+from datetime import datetime
 from dateutil import parser
-
 from imdbcrawler.items import PostItem
 
 
@@ -11,9 +10,13 @@ class ImdbSpider(scrapy.Spider):
     allowed_domains = ["imdb.com"]
     url_bases = ["http://www.imdb.com/"]
     base_url = "http://www.imdb.com"
+
+    client = None
     db = None
     collection_name = None
-    year = 2015
+    from_year = None
+    to_year = None
+
     imdb_title_endpoint = "title/"
     imdb_board_endpoint = "board/"
     imdb_page_del = "?p="
@@ -28,7 +31,7 @@ class ImdbSpider(scrapy.Spider):
     def start_requests(self):
         if len(self.imdb_ids) == 0:
             query = self.db[self.collection_name].find({
-                'releaseDate': {'$gte': datetime(self.year, 1, 1), '$lte': datetime(self.year, 12, 31)},
+                'releaseDate': {'$gte': datetime(self.from_year, 1, 1), '$lte': datetime(self.to_year, 12, 31)},
                 'languages': 'English'
             })
             self.logger.info("Number of elements to crawl forums for: %s", query.count())
@@ -43,72 +46,64 @@ class ImdbSpider(scrapy.Spider):
     def parse_board(self, response):
         threads_table = response.xpath("//*[@class='threads']")
         if threads_table:
-            for idx, thread in enumerate(threads_table.xpath("*[contains(@class, 'thread') and not(contains(@class, 'header'))]")):
-                url = self.base_url + self.get_xpath(thread, "*[@class='title']/a/@href", 0)
+            for idx, thread in enumerate(threads_table.xpath(".//*[contains(@class, 'thread') and not(contains(@class, 'header'))]")):
+                url = self.base_url + thread.xpath(".//*[@class='title']/a/@href").extract_first()
                 thread_id = self.get_thread_id(url)
-                yield scrapy.Request(url, meta={'thread_id': thread_id, 'page': response.meta['page'] + 1,
-                                       'imdb_id': response.meta['imdb_id'],
+                yield scrapy.Request(url, meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
                                        'url': response.meta['url'], }, callback=self.parse_thread)
 
-            url = response.meta['url'] + self.imdb_board_endpoint + self.imdb_page_del + str(response.meta['page'] + 1)
-            yield scrapy.Request(url, meta={'page': response.meta['page'] + 1, 'imdb_id': response.meta['imdb_id'],
-                                       'url': response.meta['url'], }, callback=self.parse_board)
+            next = threads_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
+            if next:
+                url = response.urljoin(next.extract_first())
+                yield scrapy.Request(url, meta={'imdb_id': response.meta['imdb_id'],
+                                           'url': response.meta['url'], }, callback=self.parse_board)
 
     def parse_thread(self, response):
-        post_table = response.xpath("//*[starts-with(@class, 'thread')]")
-        if post_table:
+        posts_table = response.xpath("//*[starts-with(@class, 'thread')]")
+        if posts_table:
             thread_id = response.meta['thread_id']
-            for idx, thread in enumerate(post_table.xpath("*[contains(@class, 'comment') and not(contains(@class, 'comment-summary'))]")):
+            for idx, thread in enumerate(posts_table.xpath("*[contains(@class, 'comment') and not(contains(@class, 'comment-summary'))]")):
                 post = self.parse_post(thread)
                 if not post:
                     continue
                 post['imdb_id'] = response.meta['imdb_id']
-                if thread_id != post["id"]:
+                if thread_id != post["_id"]:
                     post["reply_id"] = thread_id
                 yield post
-
-            url = response.meta['url'] + self.imdb_board_endpoint + self.imdb_thread_del + thread_id + "/" + \
-                  self.imdb_page_del + str(response.meta['page'] + 1)
-            yield scrapy.Request(url,
-                                 meta={'thread_id': thread_id, 'page': response.meta['page'] + 1,
-                                       'imdb_id': response.meta['imdb_id'],
-                                       'url': response.meta['url'], }, callback=self.parse_thread)
+            next = posts_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
+            if next:
+                url = response.urljoin(next.extract_first())
+                yield scrapy.Request(url,
+                                     meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
+                                           'url': response.meta['url'], }, callback=self.parse_thread)
 
     @staticmethod
-    def get_comment_id(id):
-        k = id.rfind("-")
-        return id[k+1:]
+    def get_comment_id(string):
+        k = string.rfind("-")
+        return string[k+1:]
 
     def parse_post(self, xml):
         post = PostItem()
-        user = self.get_xpath(xml, ".//a[contains(@class,'nickname')]/text()", 0)
+        user = xml.xpath(".//a[contains(@class,'nickname')]/text()").extract_first()
         if not user:
             return None
         self.set_item(post, "user", user)
-        self.set_item(post, "id", self.get_comment_id(self.get_xpath(xml, "@id", 0)))
-        self.set_item(post, "title", self.get_xpath(xml, "h2/text()", 0))
+        self.set_item(post, "_id", self.get_comment_id(xml.xpath("@id").extract_first()))
+        self.set_item(post, "title", xml.xpath("h2/text()").extract_first())
         try:
-            self.set_item(post, "timestamp", parser.parse(self.get_xpath(xml, ".//span[@class='timestamp']/a/text()", 0)))
+            self.set_item(post, "timestamp",
+                          parser.parse(xml.xpath(".//span[@class='timestamp']/a/text()").extract_first()))
         except:
             try:
-                self.set_item(post, "timestamp", parser.parse(self.get_xpath(xml, ".//span[@class='timestamp']/span/a/text()", 0)))
+                self.set_item(post, "timestamp", parser.parse(
+                    xml.xpath(".//span[@class='timestamp']/span/a/text()").extract_first()))
             except:
                 self.logger.warning("Could not fetch date for object %s", post["id"])
-        self.set_item(post, "content", self.get_xpath(xml, ".//div[@class='body']//text()", 0))
+        self.set_item(post, "content", xml.xpath(".//div[@class='body']//text()").extract_first())
         return post
 
     @staticmethod
     def set_item(item, key, prop):
-        if not prop or (hasattr(prop, "__len__") and not len(prop)>0):
+        if not prop or (hasattr(prop, "__len__") and not len(prop) > 0):
             return
         item[key] = prop
-
-    @staticmethod
-    def get_xpath(response, path, index):
-        parsed = response.xpath(path)
-        if parsed:
-            striped = [x.strip() for x in parsed.extract()]
-            if index < 0 or index > len(striped)-1:
-                return striped
-            return striped[index]
-        return None
