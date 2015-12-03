@@ -104,7 +104,7 @@ class ImdbSpider(scrapy.Spider):
                     xml.xpath(".//span[@class='timestamp']/span/a/text()").extract_first()))
             except:
                 self.logger.warning("Could not fetch date for object %s", post["id"])
-        self.set_item(post, "content", xml.xpath(".//div[@class='body']//text()").extract_first())
+        self.set_item(post, "content", xml.xpath(".//div[@class='body']//text()").extract_first().strip(' \t\n\r'))
         return post
 
     @staticmethod

@@ -2,7 +2,7 @@
 A web crawler for IMDB's advanced title search.
 Dumps data into a mongo database. It is designed to use two data sources.
 
-You need to add a settings.py script in the main folder
+You need to add a settings.py script to the project's main folder
 ```bash
 # -*- coding: utf-8 -*-
 
@@ -39,6 +39,12 @@ DUPEFILTER_CLASS = 'scrapy.dupefilters.BaseDupeFilter'
 ITEM_PIPELINES = {
     'imdbcrawler.pipelines.MongoPipeline': 0
 }
+```
+
+Dependencies:
+```bash
+scrapy
+dateutil
 ```
 
 Instructions:
