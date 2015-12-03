@@ -51,22 +51,27 @@ class ImdbSpider(scrapy.Spider):
     def parse_board(self, response):
         threads_table = response.xpath("//*[@class='threads']")
         if threads_table:
+            next = threads_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
+            if next:
+                url = response.urljoin(next.extract_first())
+                yield scrapy.Request(url, meta={'imdb_id': response.meta['imdb_id'],
+                                           'url': response.meta['url'], }, callback=self.parse_board, errback=self.error_handler)
             for idx, thread in enumerate(threads_table.xpath(".//*[contains(@class, 'thread') and not(contains(@class, 'header'))]")):
                 url = self.base_url + thread.xpath(".//*[@class='title']/a/@href").extract_first()
                 thread_id = self.get_thread_id(url)
                 yield scrapy.Request(url, meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
                                        'url': response.meta['url'], }, callback=self.parse_thread, errback=self.error_handler)
 
-            next = threads_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
-            if next:
-                url = response.urljoin(next.extract_first())
-                yield scrapy.Request(url, meta={'imdb_id': response.meta['imdb_id'],
-                                           'url': response.meta['url'], }, callback=self.parse_board, errback=self.error_handler)
-
     def parse_thread(self, response):
         posts_table = response.xpath("//*[starts-with(@class, 'thread')]")
         if posts_table:
             thread_id = response.meta['thread_id']
+            next = posts_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
+            if next:
+                url = response.urljoin(next.extract_first())
+                yield scrapy.Request(url,
+                                     meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
+                                           'url': response.meta['url'], }, callback=self.parse_thread, errback=self.error_handler)
             for idx, thread in enumerate(posts_table.xpath("*[contains(@class, 'comment') and not(contains(@class, 'comment-summary'))]")):
                 post = self.parse_post(thread)
                 if not post:
@@ -75,12 +80,6 @@ class ImdbSpider(scrapy.Spider):
                 if thread_id != post["_id"]:
                     post["reply_id"] = thread_id
                 yield post
-            next = posts_table.xpath("//*[@class='pagination']/a[@class='current']/following-sibling::a[1]/@href")
-            if next:
-                url = response.urljoin(next.extract_first())
-                yield scrapy.Request(url,
-                                     meta={'thread_id': thread_id, 'imdb_id': response.meta['imdb_id'],
-                                           'url': response.meta['url'], }, callback=self.parse_thread, errback=self.error_handler)
 
     @staticmethod
     def get_comment_id(string):
@@ -92,19 +91,22 @@ class ImdbSpider(scrapy.Spider):
         user = xml.xpath(".//a[contains(@class,'nickname')]/text()").extract_first()
         if not user:
             return None
+
+        content = xml.xpath(".//div[@class='body']//text()").extract_first()
+        if not content:
+            return None
+
         self.set_item(post, "user", user)
+        self.set_item(post, "content", content.strip(' \t\n\r'))
         self.set_item(post, "_id", self.get_comment_id(xml.xpath("@id").extract_first()))
         self.set_item(post, "title", xml.xpath("h2/text()").extract_first())
-        try:
-            self.set_item(post, "timestamp",
-                          parser.parse(xml.xpath(".//span[@class='timestamp']/a/text()").extract_first()))
-        except:
-            try:
-                self.set_item(post, "timestamp", parser.parse(
-                    xml.xpath(".//span[@class='timestamp']/span/a/text()").extract_first()))
-            except:
-                self.logger.warning("Could not fetch date for object %s", post["id"])
-        self.set_item(post, "content", xml.xpath(".//div[@class='body']//text()").extract_first().strip(' \t\n\r'))
+
+        timestamp = xml.xpath(".//span[@class='timestamp']/a/text()").extract_first()
+        if not timestamp:
+            timestamp = xml.xpath(".//span[@class='timestamp']/span/a/text()").extract_first()
+        if timestamp:
+            self.set_item(post, "timestamp", parser.parse(timestamp))
+
         return post
 
     @staticmethod
